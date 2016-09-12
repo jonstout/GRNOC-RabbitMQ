@@ -60,6 +60,9 @@ main();
 =cut
 
 
+=head2 new
+
+=cut
 sub new{
     my $class = shift;
     
@@ -179,6 +182,9 @@ sub _generate_uuid{
     return $self->{'uuid'}->to_string($self->{'uuid'}->create());
 }
 
+=head2 on_response_cb
+
+=cut
 sub on_response_cb {
     my $self = shift;
     return  sub {
@@ -193,7 +199,8 @@ sub on_response_cb {
         if (defined $self->{'pending_responses'}->{$corr_id}) {
             $self->{'logger'}->debug("on_response_db callback result: " . $body);
 
-            $self->{'pending_responses'}->{$corr_id}(decode_json($body));
+            undef $self->{'pending_responses'}->{$corr_id}->{'timer'};
+            $self->{'pending_responses'}->{$corr_id}->{'cb'}(decode_json($body));
             delete $self->{'pending_responses'}->{$corr_id};
         } else {
             $self->{'logger'}->debug("I don't know what to do with corr_id: $corr_id");
@@ -237,33 +244,38 @@ sub AUTOLOAD{
         }
         
 	my $corr_id = $self->_generate_uuid();
-        $self->{'pending_responses'}->{$corr_id} = $callback;
-
         $self->{'logger'}->debug("Correlation ID: " . $corr_id);
+
+        $self->{'pending_responses'}->{$corr_id} = {};
+        $self->{'pending_responses'}->{$corr_id}->{'cb'} = $callback;
         
-	$self->{'rabbit_mq'}->publish(
-	    exchange => $self->{'exchange'},
-	    routing_key => $self->{'topic'} . "." . $name,
-	    header => {
-		reply_to => $self->{'callback_queue'},
-		correlation_id => $corr_id,
-	    },
-	    body => encode_json($params)
-	    );
+	$self->{'rabbit_mq'}->publish( exchange    => $self->{'exchange'},
+                                       routing_key => $self->{'topic'} . "." . $name,
+                                       header      => {
+                                                       reply_to => $self->{'callback_queue'},
+                                                       correlation_id => $corr_id,
+                                                      },
+                                       body        => encode_json($params)
+                                     );
 
-
-        if(!$do_async){
-            
-            my $timeout = AnyEvent->timer( after => $self->{'timeout'}, 
-                                           cb => sub{ 
-					       $cv->send({error => "Timeout occured waiting for response"});
-					   });
-            
+        # Create a second call to $cv->send for blocking calls that will
+        # trigger a timeout if a response isn't first received on
+        # $cv->recv
+        if (!$do_async) {
+            my $timeout = AnyEvent->timer( after => $self->{'timeout'},
+                                           cb => sub {
+                                               $cv->send({error => "Timeout occured waiting for response"});
+                                               delete $self->{'pending_responses'}->{$corr_id};
+                                           });
             my $res = $cv->recv();
             return $res;
+        } else {
+            $self->{'pending_responses'}->{$corr_id}->{'timeout'} = AnyEvent->timer( after => $self->{'timeout'},
+                                                                                     cb => sub {
+                                                                                         $self->{'pending_responses'}->{$corr_id}->{'cb'}({error => "Timeout occurred waiting for reponse"});
+                                                                                         delete $self->{'pending_responses'}->{$corr_id};
+                                                                                     });
         }
-        
-        $self->{'logger'}->debug("Moving on...")
     }
 }
 

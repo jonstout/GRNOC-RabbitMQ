@@ -138,6 +138,9 @@ sub get_name{
     return $self->{'name'};
 }
 
+=head2 update_name
+
+=cut
 sub update_name{
     my $self = shift;
     my $name = shift;
@@ -146,6 +149,9 @@ sub update_name{
     return;
 }
 
+=head2
+
+=cut
 sub set_schema_validator{
     my $self = shift;
     my %params = @_;
@@ -359,8 +365,9 @@ sub add_input_validator {
     push( @$input_validators, $validator );
 }
 
+=head2 help
 
-
+=cut
 sub help{
     
 }
